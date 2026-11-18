@@ -75,7 +75,7 @@ details{border-bottom:1px solid var(--line);padding:8px 0}summary{cursor:pointer
 </style>
 </head><body>
 <div id="auth"></div><div id="intro" class="hidden"></div>
-<header class="hidden" id="hd"><img class="logo" data-a="go" data-x="home" alt="SPECTRA 2027"><div class="navw"><nav id="nav"></nav><i class="na l" aria-hidden="true"></i><i class="na r" aria-hidden="true"></i></div><div id="me"></div></header>
+<header class="hidden" id="hd"><img class="logo" data-a="go" data-x="home" alt="SPECTRA 2027"><div class="navw"><nav id="nav"></nav><i class="na l" aria-hidden="true"></i><i class="na r" aria-hidden="true"></i></div><div id="team-notice"><button class="btn o" data-a="notifications" aria-label="Team notifications" title="Team notifications" style="position:relative;padding:8px 11px">♢<span id="team-notice-count" style="display:none;position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;border-radius:20px;background:var(--a);color:#fff;font-size:10px;line-height:17px;text-align:center;padding:0 4px"></span></button></div><div id="me"></div></header>
 <main class="hidden" id="main"></main><div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>
@@ -126,6 +126,38 @@ async function prof(id){if(PC[id])return PC[id];const r=await sb.from('profiles'
 function chatStop(){if(chatCh){sb.removeChannel(chatCh);chatCh=null}}
 const ctime=t=>{const d=new Date(t),n=new Date(),tm=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});return d.toDateString()===n.toDateString()?tm:d.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' '+tm};
 function cmsg(m,p){const mine=m.user_id===U.id,nmx=esc(p&&(p.display_name||p.username)||'Member');return `<div class="cmsg ${m.hidden?'hid':''}" id="m-${m.id}"><span data-a="user" data-x="${esc(m.user_id)}" style="cursor:pointer">${av(p)}</span><div style="min-width:0;flex:1"><div class="cmeta"><b data-a="user" data-x="${esc(m.user_id)}" style="cursor:pointer">${nmx}</b><span class="mut sm">${ctime(m.created_at)}</span>${m.hidden?'<span class="st x">HIDDEN · UNDER REVIEW</span>':''}</div><div class="cbody">${esc(m.body)}</div><div class="mut sm cact">${mine?'':`<a data-a="rpt" data-x="${m.id}">Report</a>`}${ADM?`${mine?'':' · '}<a data-a="moddelete" data-x="${m.id}">Delete</a>`:''}</div><div id="rp-${m.id}"></div></div></div>`}
+
+let teamNoticeCh=null, teamNoticeRows=[];
+async function refreshTeamNotices(){
+ if(!U)return;
+ const r=await sb.from('team_notifications').select('id,team_id,actor_id,kind,created_at,read_at').eq('recipient_id',U.id).is('read_at',null).order('created_at',{ascending:false}).limit(30);
+ if(r.error){console.warn('Team notifications:',r.error.message);return}
+ teamNoticeRows=r.data||[];
+ const actorIds=[...new Set(teamNoticeRows.map(n=>n.actor_id).filter(Boolean))],teamIds=[...new Set(teamNoticeRows.map(n=>n.team_id).filter(Boolean))];
+ const [pr,tr]=await Promise.all([actorIds.length?sb.from('profiles').select('id,username,display_name,avatar_url').in('id',actorIds):Promise.resolve({data:[]}),teamIds.length?sb.from('teams').select('id,name').in('id',teamIds):Promise.resolve({data:[]})]);
+ const pm=Object.fromEntries((pr.data||[]).map(p=>[p.id,p])),tm=Object.fromEntries((tr.data||[]).map(t=>[t.id,t]));
+ teamNoticeRows.forEach(n=>{n.actor_profile=pm[n.actor_id]||{};n.team=tm[n.team_id]||{}});
+ const b=$('#team-notice-count');if(b){b.textContent=teamNoticeRows.length>99?'99+':String(teamNoticeRows.length);b.style.display=teamNoticeRows.length?'block':'none'}
+}
+function startTeamNotices(){
+ if(teamNoticeCh||!U)return;
+ refreshTeamNotices();
+ teamNoticeCh=sb.channel('team-notices-'+U.id)
+ .on('postgres_changes',{event:'*',schema:'public',table:'team_notifications',filter:'recipient_id=eq.'+U.id},()=>refreshTeamNotices())
+ .subscribe();
+}
+function stopTeamNotices(){if(teamNoticeCh){sb.removeChannel(teamNoticeCh);teamNoticeCh=null}}
+async function showTeamNotices(){
+ await refreshTeamNotices();
+ const rows=teamNoticeRows;
+ const body=rows.length?rows.map(n=>{
+  const actor=n.actor_profile||{},team=n.team||{};
+  const who=esc(actor.display_name||actor.username||'A user'),tn=esc(team.name||'your team');
+  const isInvite=n.kind==='invite';
+  return `<div class="card" style="margin:0 0 8px"><div><b>${isInvite?'Team invitation':'New join request'}</b></div><p class="mut sm" style="margin:5px 0">${isInvite?`${who} invited you to ${tn}.`:`${who} requested to join ${tn}.`}</p><div class="row">${isInvite?`<button class="btn" data-a="acceptinvite" data-x="${esc(n.id)}">Accept</button><button class="btn o" data-a="declineinvite" data-x="${esc(n.id)}">Decline</button>`:`<button class="btn o" data-a="team" data-x="${esc(n.team_id)}">Open team</button>`}<button class="btn o" data-a="readnotice" data-x="${esc(n.id)}">Dismiss</button></div></div>`;
+ }).join(''):'<p class="mut">You have no new team notifications.</p>';
+ overlay(`<div class="cbox" style="max-width:520px;max-height:86vh;overflow:auto;text-align:left"><h3>Team notifications</h3>${body}<div class="row"><button class="btn o" data-a="clear-notices">Mark all as read</button><button class="btn" data-a="legalclose">Close</button></div></div>`);
+}
 function chatStart(){const box=$('#cmsgs');if(box)box.scrollTop=box.scrollHeight;
  chatCh=sb.channel('community-chat').on('postgres_changes',{event:'*',schema:'public',table:'messages'},async pl=>{if(view!=='chat')return;const b=$('#cmsgs');if(!b)return;
   if(pl.eventType==='DELETE'){const x=$('#m-'+pl.old.id);if(x)x.remove();return}
@@ -176,7 +208,7 @@ async function boot(){const r=await sb.auth.getUser();U=r.data&&r.data.user;if(!
  $('#auth').classList.add('hidden');$('#hd').classList.remove('hidden');$('#main').classList.remove('hidden');
  const L={solo:'Solo Matches',chat:'Community Chat'};
  $('#nav').innerHTML=['home','teams','solo','news','trophies','chat','help'].map(v=>`<button data-a="go" data-x="${v}" id="n-${v}">${L[v]||v[0].toUpperCase()+v.slice(1)}</button>`).join('');
- meBtn();if(!ME){tmp={first:1};return go('edit')}const h=location.hash.slice(1);go(/^[a-z]+$/.test(h)&&V[h]?h:'home')}
+ meBtn();startTeamNotices();if(!ME){tmp={first:1};return go('edit')}const h=location.hash.slice(1);go(/^[a-z]+$/.test(h)&&V[h]?h:'home')}
 function meBtn(){$('#me').innerHTML=ME?`<span data-a="user" data-x="${esc(U.id)}" style="cursor:pointer">${av(ME)}</span>`:'';const e=$('#me .av');if(e)e.style.cssText='width:34px;height:34px;font-size:14px'}
 let navInit=false;
 function go(v,a,pop){if(!V[v])v='home';const same=v===view&&String(a==null?'':a)===String(arg==null?'':arg);view=v;arg=a;
@@ -206,8 +238,9 @@ async team(id){const [t1,mr,rq,mt]=await Promise.all([sb.from('teams').select('*
  let secs=[],cursub=null;if(isMem){let q=await sb.from('mep_sections').select('*').eq('team_id',id).order('title');if(!(q.data||[]).length){await sb.from('mep_sections').upsert(partsOf(t.song_id).map(x=>({team_id:id,title:x})),{onConflict:'team_id,title',ignoreDuplicates:true});q=await sb.from('mep_sections').select('*').eq('team_id',id).order('title')}secs=q.data||[];const q2=await sb.from('submissions').select('url,created_at').eq('competition_id','team').eq('team_id',id).maybeSingle();cursub=q2.data}
  return `<a data-a="go" data-x="teams">← Teams</a><div class="row" style="margin:10px 0 0">${av({avatar_url:t.logo_url,display_name:t.name},'l')}<div><h2 style="margin:0">${esc(t.name)}</h2><div class="mut">Song: ${esc(sgt(t.song_id))}</div><div class="mut sm">Captain: ${esc(cap&&cap.profiles?cap.profiles.display_name||cap.profiles.username:'?')} · ${n}/5 · ${n>=5?'FULL':t.recruiting?'Recruiting':'Not recruiting'}</div></div></div><p>${esc(t.description)}</p>
  <div class="row">${isMem?(isCap?`<button class="btn o" data-a="recruit" data-x="${esc(id)}|${t.recruiting?'0':'1'}">${t.recruiting?'Stop recruiting':'Open recruitment'}</button>`:`<button class="btn o" data-a="leaveteam" data-x="${esc(id)}">Leave team</button>`):`<button class="btn" data-a="jointeam" data-x="${esc(id)}" ${(sent||n>=5||!t.recruiting||mt||!topen())?'disabled':''}>${sent?'Request sent':n>=5?'Team full':!t.recruiting?'Not recruiting':mt?'You are in another team':!topen()?'Locked':'Request to join'}</button>`}</div>
- <h3 style="margin-top:22px">Members (${n}/5)</h3>${m.map(x=>`<div class="card row" style="margin:0 0 8px">${chip(x.user_id,x.profiles)}<span class="mut">${x.role==='captain'?'Captain':'Member'}</span></div>`).join('')}
- ${isCap?`<h3 style="margin-top:22px">Join requests</h3>${reqs.map(r=>`<div class="card row" style="margin:0 0 8px">${chip(r.user_id,r.profiles)}<button class="btn" data-a="approve" data-x="${esc(id)}|${esc(r.user_id)}" ${n>=5?'disabled':''}>Approve</button></div>`).join('')||'<p class="mut">No pending requests.</p>'}
+ <h3 style="margin-top:22px">Members (${n}/5)</h3>${m.map(x=>`<div class="card row" style="margin:0 0 8px">${chip(x.user_id,x.profiles)}<span class="mut">${x.role==='captain'?'Captain':'Member'}</span>${isCap&&x.user_id!==U.id?`<button class="btn o" style="margin-left:auto" data-a="removemember" data-x="${esc(id)}|${esc(x.user_id)}">Remove</button>`:''}</div>`).join('')}
+ ${isCap?`<h3 style="margin-top:22px">Invite a member</h3><div class="card" style="max-width:480px"><p class="mut sm">Enter the exact username of the person you want to invite.</p><div class="row"><input id="team-invite-username" maxlength="20" placeholder="Username" style="flex:1"><button class="btn" data-a="inviteuser" data-x="${esc(id)}" ${n>=5?'disabled':''}>Send invite</button></div></div>
+ <h3 style="margin-top:22px">Join requests</h3>${reqs.map(r=>`<div class="card row" style="margin:0 0 8px">${chip(r.user_id,r.profiles)}<button class="btn" data-a="approve" data-x="${esc(id)}|${esc(r.user_id)}" ${n>=5?'disabled':''}>Approve</button><button class="btn o" data-a="reject" data-x="${esc(id)}|${esc(r.user_id)}">Decline</button></div>`).join('')||'<p class="mut">No pending requests.</p>'}
  <h3>Edit team</h3><div class="card" style="max-width:480px"><label>Team name</label><input id="en" maxlength="30" value="${esc(t.name)}"><label>Description</label><textarea id="ed" rows="3" maxlength="300">${esc(t.description)}</textarea><label>Team logo (crop, zoom, PNG supported)</label><div class="row" style="margin:0"><span id="tp">${av({avatar_url:tmp.tl?tmp.tl.url:t.logo_url,display_name:t.name},'l')}</span><input type="file" accept="image/png,image/jpeg,image/webp" data-a="tlogo" style="flex:1"></div><div class="row"><button class="btn" data-a="saveteam" data-x="${esc(id)}">Save team</button></div></div>`:''}
  ${isMem?`<h3 style="margin-top:22px">MEP parts · ${esc(sgt(t.song_id))}</h3><p class="mut sm">${secs.filter(x=>x.done).length}/${secs.length} completed. Assign each part to a member and mark it as completed.</p>${secs.map(x=>`<div class="card" style="margin:0 0 8px"><b>${esc(x.title)}</b><div class="row"><select data-a="asg" data-x="${esc(x.id)}" style="max-width:200px"><option value="">Unassigned</option>${m.map(y=>`<option value="${esc(y.user_id)}" ${x.assignee===y.user_id?'selected':''}>${esc(y.profiles?(y.profiles.display_name||y.profiles.username):'Member')}</option>`).join('')}</select><button class="btn ${x.done?'':'o'}" data-a="secdone" data-x="${esc(x.id)}|${x.done?'0':'1'}">${x.done?'Completed':'Pending'}</button></div></div>`).join('')||'<p class="mut">Could not load the parts. Ask the organizers.</p>'}
  <h3 style="margin-top:22px">Team submission</h3>${cursub?`<p class="mut sm">Current link: ${hl(cursub.url)}</p>`:'<p class="mut sm">No MEP submitted yet.</p>'}${isCap?(ph('team')==='LIVE'?`<div class="row"><input id="su" placeholder="Link to your team MEP (https://…)" style="flex:1"><button class="btn" data-a="submit" data-x="team">${cursub?'Replace link':'Submit'}</button></div><p class="mut sm">Only the captain can submit, and the team needs exactly 5 members.</p>`:`<p class="mut sm">${ph('team')==='SOON'?'Submissions open on '+(C.team?fmt(C.team.starts_at):'January 1, 2027')+'.':'Submissions are closed.'}</p>`):'<p class="mut sm">Only the captain submits the team MEP.</p>'}`:''}
@@ -262,7 +295,7 @@ case'verify':{const r=await sb.auth.verifyOtp({email:tmp.em,token:$('#cd').value
 case'rverify':{const p=$('#pw').value;if(p.length<8)return toast('Password: at least 8 characters');const r=await sb.auth.verifyOtp({email:tmp.em,token:$('#cd').value.trim(),type:'recovery'});if(r.error)return toast('Incorrect or expired code. Check the digits or send a new code.');const u=await sb.auth.updateUser({password:p});if(u.error)return toast(u.error.message);toast('Password updated');boot();break}
 case'resend':{if(Date.now()-(tmp.rs||0)<60000)return toast('Please wait a minute before requesting another code.');tmp.rs=Date.now();const r=x==='code'?await sb.auth.resend({type:'signup',email:tmp.em}):await sb.auth.resetPasswordForEmail(tmp.em);toast(r.error?r.error.message:'Code sent again');break}
 case'setpw':{const p=$('#pw').value;if(p.length<8)return toast('Password: at least 8 characters');const r=await sb.auth.updateUser({password:p});if(r.error)return toast(r.error.message);toast('Password updated');boot();break}
-case'logout':await sb.auth.signOut();location.hash='';location.reload();break;
+case'logout':stopTeamNotices();await sb.auth.signOut();location.hash='';location.reload();break;
 case'saveprof':{const row={display_name:$('#pn').value.trim(),country:$('#pc').value.trim(),bio:$('#pbio').value.trim(),links:$('#pt').value.trim()};
  if(tmp.av)row.avatar_url=await up('avatars',tmp.av.blob,'avatar');if(tmp.bn)row.banner_url=await up('banners',tmp.bn.blob,'banner');let r;
  if(ME)r=await sb.from('profiles').update(row).eq('id',U.id);else{const u=$('#pu').value.trim();if(!/^[A-Za-z0-9_]{3,20}$/.test(u))return toast('Username: 3-20 letters, numbers or _');row.username=u;row.id=U.id;row.display_name=row.display_name||u;r=await sb.from('profiles').insert(row)}
@@ -272,9 +305,17 @@ case'pick':tmp.song=x;go('newteam');break;
 case'mkteam':{const n=$('#tn').value.trim();if(!n||!tmp.song)return toast('Choose a song and enter a team name');const r=await sb.rpc('create_team',{p_song:tmp.song,p_name:n,p_desc:$('#td').value.trim(),p_logo:null,p_banner:null});if(r.error)return toast(em(r.error));const id=r.data;
  if(tmp.tl){const path=id+'/logo-'+Date.now()+'.png',u=await sb.storage.from('teams').upload(path,tmp.tl.blob,{contentType:'image/png',cacheControl:'31536000'});if(u.error)toast('Team created, but the logo upload failed: '+u.error.message);else await sb.from('teams').update({logo_url:sb.storage.from('teams').getPublicUrl(path).data.publicUrl}).eq('id',id)}
  tmp={};toast('Team registered!');go('team',id);break}
-case'team':go('team',x);break;case'newteam':tmp={};go('newteam');break;
+case'team':{const o=$('#crop');if(o)o.remove();go('team',x);break}case'newteam':tmp={};go('newteam');break;
 case'jointeam':{const r=await sb.rpc('request_join',{p_team:x});toast(r.error?em(r.error):'Request sent to the captain');go('team',x);break}
 case'approve':{const[t,u]=x.split('|'),r=await sb.rpc('approve_join',{p_team:t,p_user:u});if(r.error)toast(em(r.error));go('team',t);break}
+case'reject':{const[t,u]=x.split('|'),r=await sb.rpc('reject_join',{p_team:t,p_user:u});if(r.error)return toast(em(r.error));toast('Request declined');go('team',t);break}
+case'removemember':{const[t,u]=x.split('|');if(!confirm('Remove this member from the team?'))break;const r=await sb.rpc('remove_team_member',{p_team:t,p_user:u});if(r.error)return toast(em(r.error));toast('Member removed');go('team',t);break}
+case'inviteuser':{const username=$('#team-invite-username').value.trim().replace(/^@/,'');if(!/^[A-Za-z0-9_]{3,20}$/.test(username))return toast('Enter a valid username (3–20 characters)');const r=await sb.rpc('invite_team_member',{p_team:x,p_username:username});if(r.error)return toast(em(r.error));toast('Invitation sent');go('team',x);break}
+case'notifications':showTeamNotices();break;
+case'readnotice':{const r=await sb.from('team_notifications').update({read_at:new Date().toISOString()}).eq('id',x).eq('recipient_id',U.id);if(r.error)return toast(em(r.error));await showTeamNotices();break}
+case'clear-notices':{const r=await sb.from('team_notifications').update({read_at:new Date().toISOString()}).eq('recipient_id',U.id).is('read_at',null);if(r.error)return toast(em(r.error));await showTeamNotices();break}
+case'acceptinvite':case'declineinvite':{const r=await sb.rpc('respond_team_invite',{p_notification: x,p_accept:a==='acceptinvite'});if(r.error)return toast(em(r.error));toast(a==='acceptinvite'?'You joined the team':'Invitation declined');const o=$('#crop');if(o)o.remove();await refreshTeamNotices();if(a==='acceptinvite')go('teams');break}
+
 case'leaveteam':{const r=await sb.rpc('leave_team',{p_team:x});if(r.error)return toast(em(r.error));toast('You left the team');go('teams');break}
 case'recruit':{const[t,v]=x.split('|'),r=await sb.from('teams').update({recruiting:v==='1'}).eq('id',t);if(r.error)toast('Error: '+r.error.message);go('team',t);break}
 case'saveteam':{const row={name:$('#en').value.trim(),description:$('#ed').value.trim()};if(!row.name)return toast('Enter a team name');if(tmp.tl)row.logo_url=await (async()=>{const path=x+'/logo-'+Date.now()+'.png',u=await sb.storage.from('teams').upload(path,tmp.tl.blob,{contentType:'image/png',cacheControl:'31536000'});if(u.error)throw u.error;return sb.storage.from('teams').getPublicUrl(path).data.publicUrl})();
